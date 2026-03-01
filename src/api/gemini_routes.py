@@ -238,13 +238,14 @@ async def gemini_generate_content(
             f"prompt={prompt[:50]}..., aspect_ratio={aspect_ratio}, size={image_size}"
         )
 
-        # Call generation handler (non-streaming for Gemini format)
+        # Call generation handler with stream=True to get actual generation result
+        # Then collect all chunks and extract the final result
         result_chunks = []
         async for chunk in generation_handler.handle_generation(
             model=internal_model_id,
             prompt=prompt,
             images=images,
-            stream=False
+            stream=True
         ):
             result_chunks.append(chunk)
 
@@ -257,17 +258,91 @@ async def gemini_generate_content(
         # Parse result - GenerationHandler returns JSON string in OpenAI format
         final_result = result_chunks[-1]
 
-        try:
-            result_data = json.loads(final_result)
-            # Extract content from OpenAI format
-            content = result_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # DEBUG: Log chunk count
+        debug_logger.log_info(f"[Gemini] Total chunks received: {len(result_chunks)}")
 
-            # Extract image URL from markdown format ![...](url)
-            url_match = re.search(r'!\[.*?\]\((.*?)\)', content)
-            if not url_match:
+        try:
+            # Parse streaming chunks - each chunk is in SSE format: data: {...}\n\n
+            # Collect all content from chunks
+            full_content = ""
+            for chunk in result_chunks:
+                chunk_str = chunk.strip()
+                if chunk_str.startswith("data: "):
+                    chunk_str = chunk_str[6:]  # Remove 'data: ' prefix
+                try:
+                    chunk_data = json.loads(chunk_str)
+                    # Stream chunk uses 'delta', final response uses 'message'
+                    delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                    if delta.get("content"):
+                        full_content += delta["content"]
+                    if delta.get("reasoning_content"):
+                        full_content += delta["reasoning_content"]
+                except (json.JSONDecodeError, IndexError):
+                    continue
+
+            # Also check the last chunk for 'message' format (non-streaming style)
+            try:
+                last_data = json.loads(final_result.strip()[6:] if final_result.strip().startswith("data: ") else final_result)
+                message_content = last_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if message_content:
+                    full_content = message_content
+            except:
+                pass
+
+            # Check for error in response (handle both SSE format and plain JSON)
+            if not full_content:
+                # Collect all error messages from chunks
+                error_messages = []
+                for chunk in result_chunks:
+                    chunk_str = chunk.strip()
+                    # Try to parse as SSE format first (data: {...})
+                    if chunk_str.startswith("data: "):
+                        chunk_str = chunk_str[6:]
+                    try:
+                        chunk_data = json.loads(chunk_str)
+                        if "error" in chunk_data:
+                            error_msg = chunk_data["error"].get("message", "Unknown error")
+                            error_messages.append(error_msg)
+                    except (json.JSONDecodeError, TypeError):
+                        # Include non-JSON chunks that might contain error text
+                        if chunk_str and len(chunk_str) < 500:
+                            error_messages.append(chunk_str[:200])
+                        continue
+
+                if error_messages:
+                    combined_error = "; ".join(error_messages[:3])  # Limit to first 3 errors
+                    raise HTTPException(
+                        status_code=500,
+                        detail=response_formatter.format_error_response(f"Generation failed: {combined_error}", 500)
+                    )
+
                 raise HTTPException(
                     status_code=500,
-                    detail=response_formatter.format_error_response("No image found in generation result", 500)
+                    detail=response_formatter.format_error_response(
+                        f"Empty response from generation handler. Chunks received: {len(result_chunks)}", 500
+                    )
+                )
+
+            # Extract image URL from markdown format ![...](url)
+            url_match = re.search(r'!\[.*?\]\((.*?)\)', full_content)
+            if not url_match:
+                # Check if response contains error indicators
+                error_indicators = ["error", "失败", "错误", "captcha", "验证码", "reCAPTCHA", "403", "401", "429"]
+                content_lower = full_content.lower()
+                for indicator in error_indicators:
+                    if indicator.lower() in content_lower:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=response_formatter.format_error_response(
+                                f"Image generation failed: {full_content[:500]}", 500
+                            )
+                        )
+                # Return full content for debugging if no image found
+                raise HTTPException(
+                    status_code=500,
+                    detail=response_formatter.format_error_response(
+                        f"No image URL found in response. Raw content: {full_content[:500]}", 500
+                    )
                 )
 
             image_url = url_match.group(1)
@@ -354,17 +429,11 @@ async def gemini_predict_long_running(
             )
 
         # Map to internal model
-        internal_model_key, upsample = gemini_mapper.map_video_model(
+        internal_model_id, upsample = gemini_mapper.map_video_model(
             gemini_model=model,
             aspect_ratio=aspect_ratio,
             resolution=resolution
         )
-
-        # Build internal model ID for MODEL_CONFIG lookup
-        ratio_suffix = aspect_ratio.replace(":", "-")
-        internal_model_id = f"{model}-{ratio_suffix}"
-        if resolution and resolution != "720p":
-            internal_model_id = f"{internal_model_id}-{resolution.lower()}"
 
         debug_logger.log_info(
             f"[Gemini] Video generation: model={model}, internal={internal_model_id}, "
@@ -445,24 +514,48 @@ async def _process_video_generation(
             progress=10
         )
 
-        # Call generation handler
+        # Call generation handler with stream=True to get actual generation result
         result_url = None
+        error_messages = []
+        all_chunks = []
+
         async for chunk in generation_handler.handle_generation(
             model=internal_model_id,
             prompt=prompt,
             images=None,
-            stream=False
+            stream=True
         ):
+            all_chunks.append(chunk)
+
             # Parse result to extract video URL
+            chunk_str = chunk.strip()
+            if chunk_str.startswith("data: "):
+                chunk_str = chunk_str[6:]
+
             try:
-                result_data = json.loads(chunk)
-                content = result_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                result_data = json.loads(chunk_str)
+                # Check for error in chunk
+                if "error" in result_data:
+                    error_msg = result_data["error"].get("message", "Unknown error")
+                    error_messages.append(error_msg)
+                    continue
+
+                # Try to extract video URL
+                delta = result_data.get("choices", [{}])[0].get("delta", {})
+                content = delta.get("content", "")
+                if not content:
+                    content = result_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
                 # Extract video URL from HTML format
                 url_match = re.search(r"src='([^']+)'", content)
                 if url_match:
                     result_url = url_match.group(1)
-            except:
-                pass
+            except (json.JSONDecodeError, IndexError):
+                # Check if raw chunk contains error indicators
+                chunk_lower = chunk.lower()
+                if any(err in chunk_lower for err in ["error", "失败", "错误", "captcha", "验证码", "403", "401"]):
+                    error_messages.append(chunk[:200])
+                continue
 
         # Update task with result
         if result_url:
@@ -475,13 +568,22 @@ async def _process_video_generation(
             )
             debug_logger.log_info(f"[Gemini] Video generation completed for operation {operation_id}: {result_url}")
         else:
+            # Build detailed error message
+            if error_messages:
+                combined_error = "; ".join(error_messages[:3])
+                error_detail = f"Video generation failed: {combined_error}"
+            else:
+                # Include raw chunks for debugging
+                raw_preview = " | ".join([c[:100] for c in all_chunks[-3:]])
+                error_detail = f"No video URL found. Raw response preview: {raw_preview[:500]}"
+
             await generation_handler.db.update_task(
                 operation_id,
                 status="failed",
-                error_message="No video URL in generation result",
+                error_message=error_detail,
                 completed_at=time.time()
             )
-            debug_logger.log_error(f"[Gemini] Video generation failed for operation {operation_id}: No URL")
+            debug_logger.log_error(f"[Gemini] Video generation failed for operation {operation_id}: {error_detail}")
 
     except Exception as e:
         debug_logger.log_error(f"[Gemini] Background video generation error: {str(e)}")

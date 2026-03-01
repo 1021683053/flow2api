@@ -69,10 +69,32 @@ class GeminiModelMapper:
         # Get internal aspect ratio constant
         internal_ratio = model_config["ratio_map"][aspect_ratio]
 
-        # Build internal model ID following existing naming convention
-        # e.g., "gemini-3-pro-image-landscape", "gemini-3-pro-image-portrait-2k"
-        ratio_suffix = aspect_ratio.replace(":", "-")
-        internal_model_id = f"{gemini_model}-{ratio_suffix}"
+        # Map Gemini model name to MODEL_CONFIG key
+        # gemini-3-pro-image -> gemini-3.0-pro-image
+        # gemini-2.5-flash-image -> gemini-2.5-flash-image (already correct)
+        # gemini-3.1-flash-image-preview -> gemini-3.1-flash-image-preview (already correct)
+        model_prefix = gemini_model
+        if gemini_model == "gemini-3-pro-image":
+            model_prefix = "gemini-3.0-pro-image"
+
+        # Map aspect ratio to suffix used in MODEL_CONFIG
+        # 16:9 -> landscape, 9:16 -> portrait, 1:1 -> square, etc.
+        ratio_suffix_map = {
+            "16:9": "landscape",
+            "9:16": "portrait",
+            "1:1": "square",
+            "4:3": "four-three",
+            "3:4": "three-four",
+            "1:4": "1-4",
+            "4:1": "4-1",
+            "1:8": "1-8",
+            "8:1": "8-1",
+        }
+        ratio_suffix = ratio_suffix_map.get(aspect_ratio, aspect_ratio.replace(":", "-"))
+
+        # Build internal model ID following MODEL_CONFIG naming convention
+        # e.g., "gemini-3.0-pro-image-landscape", "gemini-3.0-pro-image-landscape-2k"
+        internal_model_id = f"{model_prefix}-{ratio_suffix}"
 
         # Add size suffix if specified and not 1K
         upsample = None
@@ -141,7 +163,7 @@ class GeminiModelMapper:
             )
 
         # Get internal model key
-        internal_model_key = model_config["ratio_map"][aspect_ratio]
+        internal_model_id = model_config["ratio_map"][aspect_ratio]
 
         # Map resolution to upsample config
         upsample = None
@@ -157,8 +179,11 @@ class GeminiModelMapper:
                     }
                 )
             upsample = GEMINI_VIDEO_RESOLUTION_MAP[resolution]
+            # Append resolution suffix to model ID for MODEL_CONFIG lookup
+            # e.g., veo_3_1_t2v_fast -> veo_3_1_t2v_fast_1080p
+            internal_model_id = f"{internal_model_id}_{resolution.lower()}"
 
-        return internal_model_key, upsample
+        return internal_model_id, upsample
 
     @staticmethod
     def get_model_info(gemini_model: str) -> Optional[Dict[str, Any]]:

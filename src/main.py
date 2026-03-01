@@ -14,7 +14,7 @@ from .services.token_manager import TokenManager
 from .services.load_balancer import LoadBalancer
 from .services.concurrency_manager import ConcurrencyManager
 from .services.generation_handler import GenerationHandler
-from .api import routes, admin
+from .api import routes, admin, gemini_routes
 
 
 @asynccontextmanager
@@ -175,6 +175,7 @@ generation_handler = GenerationHandler(
 # Set dependencies
 routes.set_generation_handler(generation_handler)
 admin.set_dependencies(token_manager, proxy_manager, db)
+gemini_routes.set_generation_handler(generation_handler)
 
 # Create FastAPI app
 app = FastAPI(
@@ -196,6 +197,7 @@ app.add_middleware(
 # Include routers
 app.include_router(routes.router)
 app.include_router(admin.router)
+app.include_router(gemini_routes.router, prefix="/v1beta")
 
 # Static files - serve tmp directory for cached files
 tmp_dir = Path(__file__).parent.parent / "tmp"

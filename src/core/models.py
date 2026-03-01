@@ -1,6 +1,6 @@
 """Data models for Flow2API"""
 from pydantic import BaseModel
-from typing import Optional, List, Union, Any
+from typing import Optional, List, Union, Any, Dict
 from datetime import datetime
 
 
@@ -193,3 +193,74 @@ class ChatCompletionRequest(BaseModel):
     # Flow2API specific parameters
     image: Optional[str] = None  # Base64 encoded image (deprecated, use messages)
     video: Optional[str] = None  # Base64 encoded video (deprecated)
+
+
+# ========== Gemini API Compatible Models ==========
+
+class GeminiInlineData(BaseModel):
+    """Inline data (base64 encoded content) for Gemini API"""
+    mimeType: str
+    data: str  # base64 encoded
+
+
+class GeminiContentPart(BaseModel):
+    """Single part of content (text or inline data) for Gemini API"""
+    text: Optional[str] = None
+    inlineData: Optional[GeminiInlineData] = None
+
+
+class GeminiContent(BaseModel):
+    """Content in Gemini format"""
+    role: Optional[str] = "user"
+    parts: List[GeminiContentPart]
+
+
+class GeminiGenerationConfig(BaseModel):
+    """Generation configuration for Gemini image generation"""
+    aspectRatio: Optional[str] = "16:9"
+    imageSize: Optional[str] = None  # "1K", "2K", "4K"
+
+
+class GeminiGenerateContentRequest(BaseModel):
+    """Gemini generateContent request body"""
+    contents: List[GeminiContent]
+    generationConfig: Optional[GeminiGenerationConfig] = None
+
+
+class GeminiGenerateContentResponse(BaseModel):
+    """Gemini generateContent response"""
+    candidates: List[Dict[str, Any]]
+    usageMetadata: Optional[Dict[str, Any]] = None
+
+
+class GeminiPredictInstance(BaseModel):
+    """Single prediction instance for Gemini video generation"""
+    prompt: str
+    aspectRatio: Optional[str] = "16:9"
+    resolution: Optional[str] = "720p"  # "720p", "1080p", "4k"
+
+
+class GeminiPredictLongRunningRequest(BaseModel):
+    """Gemini predictLongRunning request body"""
+    instances: List[GeminiPredictInstance]
+    parameters: Optional[Dict[str, Any]] = None
+
+
+class GeminiOperationResponse(BaseModel):
+    """Gemini long-running operation response"""
+    name: str
+    done: bool = False
+    response: Optional[Dict[str, Any]] = None
+    error: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class GeminiModelInfo(BaseModel):
+    """Gemini model information"""
+    name: str
+    version: str
+    displayName: str
+    description: str
+    inputTokenLimit: int
+    outputTokenLimit: int
+    supportedGenerationMethods: List[str]

@@ -23,7 +23,7 @@ Flow2API 除了提供 OpenAI 兼容的 `/v1/chat/completions` 接口外，还提
 | 模型名                           | 内部模型  | 支持的比例                                    | 支持的尺寸 |
 | -------------------------------- | --------- | --------------------------------------------- | ---------- |
 | `gemini-2.5-flash-image`         | GEM_PIX   | 16:9, 9:16                                    | 1K, 2K, 4K |
-| `gemini-3-pro-image`             | GEM_PIX_2 | 16:9, 9:16, 1:1, 4:3, 3:4                     | 1K, 2K, 4K |
+| `gemini-3-pro-image-preview`     | GEM_PIX_2 | 16:9, 9:16, 1:1, 4:3, 3:4                     | 1K, 2K, 4K |
 | `gemini-3.1-flash-image-preview` | NARWHAL   | 16:9, 9:16, 1:1, 4:3, 3:4, 1:4, 4:1, 1:8, 8:1 | 1K, 2K, 4K |
 
 ### 视频生成模型
@@ -50,9 +50,9 @@ GET /v1beta/models
 {
   "models": [
     {
-      "name": "models/gemini-3-pro-image",
+      "name": "models/gemini-3-pro-image-preview",
       "version": "1.0",
-      "displayName": "Gemini 3 Pro Image",
+      "displayName": "Gemini 3 Pro Image Preview",
       "description": "Image generation model (GEM_PIX_2). Supported ratios: 16:9, 9:16, 1:1, 4:3, 3:4",
       "inputTokenLimit": 8192,
       "outputTokenLimit": 2048,
@@ -83,15 +83,15 @@ GET /v1beta/models/{model}
 
 **参数**:
 
-- `model`: 模型名称，如 `gemini-3-pro-image` 或 `models/gemini-3-pro-image`
+- `model`: 模型名称，如 `gemini-3-pro-image-preview` 或 `models/gemini-3-pro-image-preview`
 
 **响应示例**:
 
 ```json
 {
-  "name": "models/gemini-3-pro-image",
+  "name": "models/gemini-3-pro-image-preview",
   "version": "1.0",
-  "displayName": "Gemini 3 Pro Image",
+  "displayName": "Gemini 3 Pro Image Preview",
   "description": "Image generation model (GEM_PIX_2). Supported ratios: 16:9, 9:16, 1:1, 4:3, 3:4",
   "inputTokenLimit": 8192,
   "outputTokenLimit": 2048,
@@ -112,7 +112,7 @@ POST /v1beta/models/{model}:generateContent
 **支持的模型**:
 
 - `gemini-2.5-flash-image`
-- `gemini-3-pro-image`
+- `gemini-3-pro-image-preview`
 - `gemini-3.1-flash-image-preview`
 
 **请求体**:
@@ -179,7 +179,7 @@ POST /v1beta/models/{model}:generateContent
 {
   "error": {
     "code": 400,
-    "message": "Aspect ratio '21:9' not supported by gemini-3-pro-image. Supported: ['16:9', '9:16', '1:1', '4:3', '3:4']",
+    "message": "Aspect ratio '21:9' not supported by gemini-3-pro-image-preview. Supported: ['16:9', '9:16', '1:1', '4:3', '3:4']",
     "status": "INVALID_ARGUMENT"
   }
 }
@@ -188,7 +188,7 @@ POST /v1beta/models/{model}:generateContent
 **curl 示例**:
 
 ```bash
-curl -X POST "http://localhost:8000/v1beta/models/gemini-3-pro-image:generateContent" \
+curl -X POST "http://localhost:8000/v1beta/models/gemini-3-pro-image-preview:generateContent" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -430,7 +430,7 @@ Client Response (Gemini Format)
 
 ```bash
 # 测试基本图片生成
-curl -X POST "http://localhost:8000/v1beta/models/gemini-3-pro-image:generateContent" \
+curl -X POST "http://localhost:8000/v1beta/models/gemini-3-pro-image-preview:generateContent" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{

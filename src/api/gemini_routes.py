@@ -189,7 +189,7 @@ async def gemini_generate_content(
 
     Supported models:
     - gemini-2.5-flash-image (aspect ratios: 16:9, 9:16)
-    - gemini-3-pro-image (aspect ratios: 16:9, 9:16, 1:1, 4:3, 3:4)
+    - gemini-3-pro-image-preview (aspect ratios: 16:9, 9:16, 1:1, 4:3, 3:4)
     - gemini-3.1-flash-image-preview (aspect ratios: 16:9, 9:16, 1:1, 4:3, 3:4, 1:4, 4:1, 1:8, 8:1)
 
     Supported sizes: 1K, 2K, 4K

@@ -29,7 +29,7 @@ class GeminiModelMapper:
         Map Gemini image model parameters to internal model configuration.
 
         Args:
-            gemini_model: Gemini model name (e.g., "gemini-3-pro-image")
+            gemini_model: Gemini model name (e.g., "gemini-3-pro-image-preview")
             aspect_ratio: Aspect ratio (e.g., "16:9", "1:1")
             image_size: Image size (e.g., "1K", "2K", "4K")
 
@@ -69,13 +69,14 @@ class GeminiModelMapper:
         # Get internal aspect ratio constant
         internal_ratio = model_config["ratio_map"][aspect_ratio]
 
-        # Map Gemini model name to MODEL_CONFIG key
-        # gemini-3-pro-image -> gemini-3.0-pro-image
-        # gemini-2.5-flash-image -> gemini-2.5-flash-image (already correct)
-        # gemini-3.1-flash-image-preview -> gemini-3.1-flash-image-preview (already correct)
-        model_prefix = gemini_model
-        if gemini_model == "gemini-3-pro-image":
+        # Map Gemini model name to internal model prefix
+        # gemini-3-pro-image-preview -> gemini-3.0-pro-image
+        # gemini-2.5-flash-image -> gemini-2.5-flash-image (no change)
+        # gemini-3.1-flash-image-preview -> gemini-3.1-flash-image-preview (no change)
+        if gemini_model == "gemini-3-pro-image-preview":
             model_prefix = "gemini-3.0-pro-image"
+        else:
+            model_prefix = gemini_model
 
         # Map aspect ratio to suffix used in MODEL_CONFIG
         # 16:9 -> landscape, 9:16 -> portrait, 1:1 -> square, etc.

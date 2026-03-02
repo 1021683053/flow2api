@@ -15,7 +15,7 @@ GEMINI_IMAGE_MODEL_MAP = {
             "9:16": "IMAGE_ASPECT_RATIO_PORTRAIT",
         }
     },
-    "gemini-3-pro-image": {
+    "gemini-3-pro-image-preview": {
         "model_name": "GEM_PIX_2",
         "supported_ratios": ["16:9", "9:16", "1:1", "4:3", "3:4"],
         "ratio_map": {

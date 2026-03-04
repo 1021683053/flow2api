@@ -210,9 +210,9 @@ class GeminiResponseFormatter:
     """Format GenerationHandler responses to Gemini API format"""
 
     @staticmethod
-    def format_image_response(base64_data: str, mime_type: str = "image/jpeg") -> Dict[str, Any]:
+    def format_image_response(base64_data: str, mime_type: str = "image/png") -> Dict[str, Any]:
         """
-        Format image generation response to Gemini API format.
+        Format image generation response to Gemini API format (官方格式).
 
         Returns:
             Dict matching Gemini generateContent response format
@@ -221,6 +221,7 @@ class GeminiResponseFormatter:
             "candidates": [
                 {
                     "content": {
+                        "role": "model",
                         "parts": [
                             {
                                 "inlineData": {
@@ -244,7 +245,7 @@ class GeminiResponseFormatter:
     @staticmethod
     def format_video_operation(operation_name: str) -> Dict[str, Any]:
         """
-        Format video generation operation response.
+        Format video generation operation response (官方格式).
 
         Returns:
             Dict matching Gemini long-running operation format
@@ -253,31 +254,30 @@ class GeminiResponseFormatter:
             "name": operation_name,
             "done": False,
             "metadata": {
-                "@type": "type.googleapis.com/google.cloud.aiplatform.v1.PredictOperationMetadata",
-                "genericMetadata": {
-                    "createTime": "",
-                    "updateTime": ""
-                }
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningMetadata",
+                "predictedOutputTokenCount": 0
             }
         }
 
     @staticmethod
-    def format_video_result(video_url: str) -> Dict[str, Any]:
+    def format_video_result(operation_name: str, video_url: str) -> Dict[str, Any]:
         """
-        Format completed video operation result.
+        Format completed video operation result (官方格式).
 
         Returns:
-            Dict with completed operation containing video URI
+            Dict matching Gemini GenerateVideosResponse format
         """
         return {
-            "name": "",
+            "name": operation_name,
             "done": True,
             "response": {
-                "@type": "type.googleapis.com/google.cloud.aiplatform.v1.PredictResponse",
-                "predictions": [
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateVideosResponse",
+                "generatedVideos": [
                     {
-                        "mimeType": "video/mp4",
-                        "uri": video_url
+                        "video": {
+                            "uri": video_url,
+                            "mimeType": "video/mp4"
+                        }
                     }
                 ]
             }
@@ -291,7 +291,7 @@ class GeminiResponseFormatter:
         error_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Format operation status response.
+        Format operation status response (官方格式).
 
         Args:
             operation_name: The operation identifier
@@ -314,23 +314,23 @@ class GeminiResponseFormatter:
                 "status": "INTERNAL"
             }
         elif done and result_urls:
+            # 官方格式: GenerateVideosResponse
             response["response"] = {
-                "@type": "type.googleapis.com/google.cloud.aiplatform.v1.PredictResponse",
-                "predictions": [
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateVideosResponse",
+                "generatedVideos": [
                     {
-                        "mimeType": "video/mp4",
-                        "uri": url
+                        "video": {
+                            "uri": url,
+                            "mimeType": "video/mp4"
+                        }
                     } for url in result_urls
                 ]
             }
         else:
-            # Still processing
+            # Still processing (官方格式)
             response["metadata"] = {
-                "@type": "type.googleapis.com/google.cloud.aiplatform.v1.PredictOperationMetadata",
-                "genericMetadata": {
-                    "createTime": "",
-                    "updateTime": ""
-                }
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningMetadata",
+                "predictedOutputTokenCount": 0
             }
 
         return response
@@ -359,12 +359,47 @@ class GeminiResponseFormatter:
         }
 
     @staticmethod
-    def format_error_response(message: str, code: int = 400) -> Dict[str, Any]:
-        """Format error response in Gemini API format"""
-        return {
+    def format_error_response(
+        message: str,
+        code: int = 400,
+        status: Optional[str] = None,
+        details: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Format error response in Gemini API format (官方格式).
+
+        Args:
+            message: Error message
+            code: HTTP status code
+            status: Error status (e.g., "INVALID_ARGUMENT", "PERMISSION_DENIED")
+            details: Optional list of error details
+
+        Returns:
+            Dict matching Gemini error response format
+        """
+        # 默认 status 映射
+        if status is None:
+            status_map = {
+                400: "INVALID_ARGUMENT",
+                401: "UNAUTHENTICATED",
+                403: "PERMISSION_DENIED",
+                404: "NOT_FOUND",
+                429: "RESOURCE_EXHAUSTED",
+                500: "INTERNAL",
+                503: "UNAVAILABLE"
+            }
+            status = status_map.get(code, "INTERNAL")
+
+        error_response: Dict[str, Any] = {
             "error": {
                 "code": code,
                 "message": message,
-                "status": "INVALID_ARGUMENT" if code == 400 else "INTERNAL"
+                "status": status
             }
         }
+
+        # 添加 details（如果有）
+        if details:
+            error_response["error"]["details"] = details
+
+        return error_response

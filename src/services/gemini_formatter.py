@@ -72,9 +72,11 @@ class GeminiModelMapper:
         # Map Gemini model name to internal model prefix
         # gemini-3-pro-image-preview -> gemini-3.0-pro-image
         # gemini-2.5-flash-image -> gemini-2.5-flash-image (no change)
-        # gemini-3.1-flash-image-preview -> gemini-3.1-flash-image-preview (no change)
+        # gemini-3.1-flash-image-preview -> gemini-3.1-flash-image
         if gemini_model == "gemini-3-pro-image-preview":
             model_prefix = "gemini-3.0-pro-image"
+        elif gemini_model == "gemini-3.1-flash-image-preview":
+            model_prefix = "gemini-3.1-flash-image"
         else:
             model_prefix = gemini_model
 
@@ -113,6 +115,29 @@ class GeminiModelMapper:
             upsample = GEMINI_IMAGE_SIZE_MAP[image_size]
             if upsample:
                 internal_model_id = f"{internal_model_id}-{image_size.lower()}"
+
+        # Check if internal model actually exists in MODEL_CONFIG
+        # This catches cases where gemini_mapping declares support but MODEL_CONFIG doesn't have it
+        from ..services.generation_handler import MODEL_CONFIG
+        if internal_model_id not in MODEL_CONFIG:
+            # Find actually available ratios by checking which ones exist in MODEL_CONFIG
+            available_ratios = []
+            for ratio in model_config["supported_ratios"]:
+                test_ratio_suffix = ratio_suffix_map.get(ratio, ratio.replace(":", "-"))
+                test_model_id = f"{model_prefix}-{test_ratio_suffix}"
+                if test_model_id in MODEL_CONFIG:
+                    available_ratios.append(ratio)
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "code": 400,
+                        "message": f"Aspect ratio '{aspect_ratio}' is not supported by model '{gemini_model}'. "
+                                   f"Supported ratios: {available_ratios}"
+                    }
+                }
+            )
 
         return internal_model_id, upsample
 

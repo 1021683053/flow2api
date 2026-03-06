@@ -1,121 +1,81 @@
-# Flow2API Gemini API 兼容文档
+# Flow2API Gemini 兼容接口说明
 
-本文档介绍 Flow2API 提供的 Google Gemini API 兼容接口。
+本文档描述 Flow2API 当前提供的 Gemini 兼容接口行为。
 
-## 概述
+更新时间：2026-03-06
 
-Flow2API 除了提供 OpenAI 兼容的 `/v1/chat/completions` 接口外，还提供 Gemini API 兼容接口，支持：
+## 1. 基础信息
 
-- **Gemini Image 生成** - 兼容 `generateContent` 接口，返回 base64 编码图片
-- **Veo 视频生成** - 兼容 `predictLongRunning` 接口，支持异步轮询
+- Base URL: `http://your-host:8000/v1beta`
+- 认证方式：
+  - `Authorization: Bearer YOUR_API_KEY`
+  - 或 `?key=YOUR_API_KEY`
 
-所有 Gemini 兼容接口统一前缀为 `/v1beta`。
+## 2. 当前可用端点
 
-## 基础信息
+### 图片相关
 
-- **Base URL**: `http://your-server:8000/v1beta`
-- **认证方式**: 与原有接口相同，使用 `Authorization: Bearer YOUR_API_KEY` 或查询参数 `?key=YOUR_API_KEY`
+- `GET /v1beta/models`
+- `GET /v1beta/models/{model}`
+- `POST /v1beta/models/{model}:generateContent`
 
-## 模型列表
+### 视频相关
 
-### 图片生成模型
+- `POST /v1beta/models/{model}:predictLongRunning`
 
-| 模型名                           | 内部模型  | 支持的比例                                    | 支持的尺寸 |
-| -------------------------------- | --------- | --------------------------------------------- | ---------- |
-| `gemini-2.5-flash-image`         | GEM_PIX   | 16:9, 9:16                                    | 1K, 2K, 4K |
-| `gemini-3-pro-image-preview`     | GEM_PIX_2 | 16:9, 9:16, 1:1, 4:3, 3:4                     | 1K, 2K, 4K |
-| `gemini-3.1-flash-image-preview` | NARWHAL   | 16:9, 9:16, 1:1, 4:3, 3:4, 1:4, 4:1, 1:8, 8:1 | 1K, 2K, 4K |
+当前代码中已经没有视频轮询端点：
 
-### 视频生成模型
+- `GET /v1beta/operations/{operation_id}` 不再支持
 
-| 模型名                          | 类型 | 支持的比例 | 支持的分辨率    |
-| ------------------------------- | ---- | ---------- | --------------- |
-| `veo-3.1-generate-preview`      | T2V  | 16:9, 9:16 | 720p, 1080p, 4k |
-| `veo-3.1-fast-generate-preview` | T2V  | 16:9, 9:16 | 720p, 1080p, 4k |
-| `veo-2.0-generate-001`          | T2V  | 16:9, 9:16 | 720p            |
+## 3. 模型现状
 
-## API 端点
+### 4.1 图片模型
 
-### 1. 列出模型
+图片接口继续使用 Gemini 风格模型名。
 
-```http
-GET /v1beta/models
-```
+| Gemini 模型名 | 当前实际可用比例 | 当前实际可用尺寸 | 内部模型 |
+| --- | --- | --- | --- |
+| `gemini-2.5-flash-image` | `16:9`、`9:16` | `1K` | `GEM_PIX` |
+| `gemini-3-pro-image-preview` | `16:9`、`9:16`、`1:1`、`4:3`、`3:4` | `1K`、`2K`、`4K` | `GEM_PIX_2` |
+| `gemini-3.1-flash-image-preview` | `16:9`、`9:16`、`1:1`、`4:3`、`3:4` | `1K`、`2K`、`4K` | `NARWHAL` |
 
-返回所有可用的 Gemini 模型列表。
+注意：
 
-**响应示例**:
+- 路由层允许校验的 `aspectRatio` 范围比实际后端更大，但真正可用能力以 `MODEL_CONFIG` 中存在的模型为准。
+- `gemini-3.1-flash-image-preview` 在映射表里声明了 `1:4`、`4:1`、`1:8`、`8:1`，但当前后端没有对应模型，实际调用会报不支持。
+- 路由层把 `512px` 列为可校验值，但当前映射只支持 `1K`、`2K`、`4K`，因此 `512px` 目前并不能成功生成。
 
-```json
-{
-  "models": [
-    {
-      "name": "models/gemini-3-pro-image-preview",
-      "version": "1.0",
-      "displayName": "Gemini 3 Pro Image Preview",
-      "description": "Image generation model (GEM_PIX_2). Supported ratios: 16:9, 9:16, 1:1, 4:3, 3:4",
-      "inputTokenLimit": 8192,
-      "outputTokenLimit": 2048,
-      "supportedGenerationMethods": ["generateContent"]
-    },
-    {
-      "name": "models/veo-3.1-generate-preview",
-      "version": "1.0",
-      "displayName": "Veo 3.1 Generate Preview",
-      "description": "Video generation model. Supported ratios: 16:9, 9:16",
-      "inputTokenLimit": 8192,
-      "outputTokenLimit": 2048,
-      "supportedGenerationMethods": ["predictLongRunning"]
-    }
-  ]
-}
-```
+### 4.2 视频模型
 
----
+视频接口当前不再使用官方 Veo 模型名，而是直接使用本地 `MODEL_CONFIG` 中的模型键。
 
-### 2. 获取模型信息
+可通过 `GET /v1beta/models` 获取完整列表。当前视频模型大致分为三类：
 
-```http
-GET /v1beta/models/{model}
-```
+| 类型 | 说明 | 示例模型名 |
+| --- | --- | --- |
+| `t2v` | 文生视频，不接收图片 | `veo_3_1_t2v_fast_landscape` |
+| `i2v` | 图生视频，通常要求 1-2 张图片 | `veo_3_1_i2v_s_fast_fl` |
+| `r2v` | 多参考图视频，可传多张图片 | `veo_3_1_r2v_fast` |
 
-获取指定模型的详细信息。
+另外，`1080p` / `4k` 当前也是通过独立模型名暴露，而不是仅靠请求参数切换，例如：
 
-**参数**:
+- `veo_3_1_t2v_fast_1080p`
+- `veo_3_1_t2v_fast_4k`
+- `veo_3_1_i2v_s_fast_ultra_fl_1080p`
 
-- `model`: 模型名称，如 `gemini-3-pro-image-preview` 或 `models/gemini-3-pro-image-preview`
+注意：
 
-**响应示例**:
+- `generationConfig.videoConfig.resolution` 当前只做合法性校验，不负责把基础模型自动切换到 `1080p` / `4k` 版本。
+- `generationConfig.videoConfig.aspectRatio` 当前也只是和模型自身横竖屏属性做一致性校验，不负责自动改模型。
+- 因此，视频分辨率和横竖屏的主控制项是“模型名本身”。
 
-```json
-{
-  "name": "models/gemini-3-pro-image-preview",
-  "version": "1.0",
-  "displayName": "Gemini 3 Pro Image Preview",
-  "description": "Image generation model (GEM_PIX_2). Supported ratios: 16:9, 9:16, 1:1, 4:3, 3:4",
-  "inputTokenLimit": 8192,
-  "outputTokenLimit": 2048,
-  "supportedGenerationMethods": ["generateContent"]
-}
-```
+## 4. 图片接口
 
----
-
-### 3. 图片生成 (generateContent)
+### 5.1 请求格式
 
 ```http
 POST /v1beta/models/{model}:generateContent
 ```
-
-生成图片并返回 base64 编码结果。
-
-**支持的模型**:
-
-- `gemini-2.5-flash-image`
-- `gemini-3-pro-image-preview`
-- `gemini-3.1-flash-image-preview`
-
-**请求体**:
 
 ```json
 {
@@ -124,39 +84,53 @@ POST /v1beta/models/{model}:generateContent
       "role": "user",
       "parts": [
         {
-          "text": "一只戴着帽子的可爱猫咪，水彩风格"
+          "text": "一只戴帽子的猫，水彩风格"
         }
       ]
     }
   ],
   "generationConfig": {
-    "aspectRatio": "16:9",
-    "imageSize": "2K"
+    "imageConfig": {
+      "aspectRatio": "1:1",
+      "imageSize": "2K"
+    }
   }
 }
 ```
 
-**参数说明**:
+### 5.2 当前支持情况
 
-- `contents`: 内容数组，包含文本提示
-  - `parts[].text`: 图片生成提示词
-  - `parts[].inlineData`: （可选）参考图片的 base64 数据
-- `generationConfig`: 生成配置
-  - `aspectRatio`: 宽高比，可选值见模型列表
-  - `imageSize`: 输出尺寸，可选 `1K`, `2K`, `4K`
+- 支持文本提示词
+- 支持在 `contents.parts[].inlineData` 中附带参考图
+- 默认比例是 `1:1`
+- 图片返回为 Gemini 风格 `inlineData.data` base64
 
-**响应示例**:
+### 5.3 当前不支持或有限支持
+
+- `safetySettings`：直接返回 400
+- `generationConfig` 中除 `imageConfig` 之外的大部分字段：
+  - `temperature`
+  - `topP`
+  - `topK`
+  - `candidateCount`
+  - `maxOutputTokens`
+  - `stopSequences`
+  - `responseMimeType`
+- `responseModalities` 仅允许 `TEXT` / `IMAGE`
+
+### 5.4 响应示例
 
 ```json
 {
   "candidates": [
     {
       "content": {
+        "role": "model",
         "parts": [
           {
             "inlineData": {
-              "mimeType": "image/jpeg",
-              "data": "/9j/4AAQSkZJRgABAQAAAQ..."
+              "mimeType": "image/png",
+              "data": "base64..."
             }
           }
         ]
@@ -173,305 +147,193 @@ POST /v1beta/models/{model}:generateContent
 }
 ```
 
-**错误响应**:
-
-```json
-{
-  "error": {
-    "code": 400,
-    "message": "Aspect ratio '21:9' not supported by gemini-3-pro-image-preview. Supported: ['16:9', '9:16', '1:1', '4:3', '3:4']",
-    "status": "INVALID_ARGUMENT"
-  }
-}
-```
-
-**curl 示例**:
+### 5.5 curl 示例
 
 ```bash
 curl -X POST "http://localhost:8000/v1beta/models/gemini-3-pro-image-preview:generateContent" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "contents": [{
-      "parts": [{"text": "一只戴着帽子的可爱猫咪，水彩风格"}]
-    }],
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "一只戴帽子的猫，水彩风格"
+          }
+        ]
+      }
+    ],
     "generationConfig": {
-      "aspectRatio": "16:9",
-      "imageSize": "2K"
+      "imageConfig": {
+        "aspectRatio": "1:1",
+        "imageSize": "2K"
+      }
     }
   }'
 ```
 
----
+## 5. 视频接口
 
-### 4. 视频生成 (predictLongRunning)
+### 6.1 请求格式
 
 ```http
-POST /v1beta/models/{model}:predictLongRunning
+POST /v1beta/models/{local_video_model}:predictLongRunning
 ```
 
-提交视频生成任务，返回 operation ID 用于轮询查询。
-
-**支持的模型**:
-
-- `veo-3.1-generate-preview`
-- `veo-3.1-fast-generate-preview`
-- `veo-2.0-generate-001`
-
-**请求体**:
+当前视频请求体已经改成与图片接口一致的 `contents` 格式，而不是官方 Veo 的 `instances` / `parameters` 格式。
 
 ```json
 {
-  "instances": [
+  "contents": [
     {
-      "prompt": "一只猫在草地上奔跑，阳光明媚",
-      "aspectRatio": "16:9",
-      "resolution": "1080p"
+      "role": "user",
+      "parts": [
+        {
+          "text": "一只猫在草地上奔跑"
+        }
+      ]
     }
   ],
-  "parameters": {}
-}
-```
-
-**参数说明**:
-
-- `instances`: 实例数组（目前只使用第一个）
-  - `prompt`: 视频生成提示词
-  - `aspectRatio`: 宽高比，`16:9` 或 `9:16`
-  - `resolution`: 分辨率，`720p`, `1080p`, `4k`
-- `parameters`: （可选）额外参数
-
-**响应示例**:
-
-```json
-{
-  "name": "operations/a1b2c3d4e5f6",
-  "done": false,
-  "metadata": {
-    "@type": "type.googleapis.com/google.cloud.aiplatform.v1.PredictOperationMetadata",
-    "genericMetadata": {
-      "createTime": "",
-      "updateTime": ""
+  "generationConfig": {
+    "videoConfig": {
+      "aspectRatio": "16:9",
+      "resolution": "1080p"
     }
   }
 }
 ```
 
-**curl 示例**:
-
-```bash
-curl -X POST "http://localhost:8000/v1beta/models/veo-3.1-generate-preview:predictLongRunning" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "instances": [{
-      "prompt": "一只猫在草地上奔跑，阳光明媚",
-      "aspectRatio": "16:9",
-      "resolution": "1080p"
-    }]
-  }'
-```
-
----
-
-### 5. 查询操作状态
-
-```http
-GET /v1beta/operations/{operation_id}
-```
-
-查询视频生成任务的状态和结果。
-
-**参数**:
-
-- `operation_id`: Operation ID，格式为 `operations/xxx`
-
-**响应示例 - 处理中**:
+如果是图生视频，可在 `parts` 中加入 `inlineData`：
 
 ```json
 {
-  "name": "operations/a1b2c3d4e5f6",
-  "done": false,
-  "metadata": {
-    "@type": "type.googleapis.com/google.cloud.aiplatform.v1.PredictOperationMetadata"
+  "inlineData": {
+    "mimeType": "image/jpeg",
+    "data": "base64..."
   }
 }
 ```
 
-**响应示例 - 已完成**:
+### 6.2 当前行为
+
+- 接口名仍叫 `predictLongRunning`
+- 但当前实现是同步执行
+- 返回体通常直接是：
+  - `done: true` + `response.generatedVideos`
+  - 或 `done: true` + `error`
+- 不需要再调用 `GET /operations/{id}` 轮询
+
+### 6.3 当前限制
+
+- 模型名必须是本地视频模型名，不能再传旧的官方 `veo-*` 别名
+- `aspectRatio` 只能是 `16:9` 或 `9:16`
+- `resolution` 只能是 `720p`、`1080p`、`4k`
+- 这些参数当前主要用于校验，不负责自动选模型
+- 文本和图片至少要提供一种
+
+### 6.4 成功响应示例
 
 ```json
 {
-  "name": "operations/a1b2c3d4e5f6",
+  "name": "operations/1234567890abcdef",
   "done": true,
   "response": {
-    "@type": "type.googleapis.com/google.cloud.aiplatform.v1.PredictResponse",
-    "predictions": [
+    "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateVideosResponse",
+    "generatedVideos": [
       {
-        "mimeType": "video/mp4",
-        "uri": "http://localhost:8000/tmp/a1b2c3d4.mp4"
+        "video": {
+          "uri": "https://example.com/video.mp4",
+          "mimeType": "video/mp4"
+        }
       }
     ]
   }
 }
 ```
 
-**响应示例 - 失败**:
+### 6.5 失败响应示例
 
 ```json
 {
-  "name": "operations/a1b2c3d4e5f6",
+  "name": "operations/1234567890abcdef",
   "done": true,
   "error": {
     "code": 500,
-    "message": "Video generation failed",
+    "message": "Video generation failed: ...",
     "status": "INTERNAL"
   }
 }
 ```
 
-**curl 示例**:
+### 6.6 curl 示例
 
 ```bash
-curl "http://localhost:8000/v1beta/operations/a1b2c3d4e5f6" \
-  -H "Authorization: Bearer YOUR_API_KEY"
-```
-
----
-
-## 比例与尺寸映射
-
-### 图片比例映射
-
-| Gemini 比例 | 内部比例标识                            |
-| ----------- | --------------------------------------- |
-| `16:9`      | IMAGE_ASPECT_RATIO_LANDSCAPE            |
-| `9:16`      | IMAGE_ASPECT_RATIO_PORTRAIT             |
-| `1:1`       | IMAGE_ASPECT_RATIO_SQUARE               |
-| `4:3`       | IMAGE_ASPECT_RATIO_LANDSCAPE_FOUR_THREE |
-| `3:4`       | IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR  |
-| `1:4`       | IMAGE_ASPECT_RATIO_PORTRAIT_1_4         |
-| `4:1`       | IMAGE_ASPECT_RATIO_LANDSCAPE_4_1        |
-| `1:8`       | IMAGE_ASPECT_RATIO_PORTRAIT_1_8         |
-| `8:1`       | IMAGE_ASPECT_RATIO_LANDSCAPE_8_1        |
-
-### 图片尺寸映射
-
-| Gemini 尺寸 | 内部处理                     |
-| ----------- | ---------------------------- |
-| `1K`        | 原始分辨率                   |
-| `2K`        | UPSAMPLE_IMAGE_RESOLUTION_2K |
-| `4K`        | UPSAMPLE_IMAGE_RESOLUTION_4K |
-
-### 视频分辨率映射
-
-| Gemini 分辨率 | 内部处理                          |
-| ------------- | --------------------------------- |
-| `720p`        | 原始分辨率                        |
-| `1080p`       | VIDEO_RESOLUTION_1080P + 放大模型 |
-| `4k`          | VIDEO_RESOLUTION_4K + 放大模型    |
-
----
-
-## 错误码说明
-
-| HTTP 状态码 | 错误场景                                   |
-| ----------- | ------------------------------------------ |
-| 400         | 无效请求参数（不支持的模型、比例、尺寸等） |
-| 401         | 认证失败（API Key 无效）                   |
-| 404         | Operation 不存在                           |
-| 500         | 服务器内部错误（生成失败等）               |
-| 503         | 无可用 Token                               |
-
----
-
-## 与 OpenAI 兼容接口的区别
-
-| 特性     | OpenAI 兼容接口     | Gemini 兼容接口           |
-| -------- | ------------------- | ------------------------- |
-| 端点前缀 | `/v1`               | `/v1beta`                 |
-| 图片输出 | URL (Markdown 格式) | base64 (inlineData)       |
-| 视频输出 | URL (HTML 格式)     | 异步 Operation + URI      |
-| 模型选择 | 单一模型 ID         | 模型 + 比例 + 尺寸/分辨率 |
-| 参考图片 | 支持                | 支持 (inlineData)         |
-
----
-
-## 实现说明
-
-### 架构设计
-
-```
-Client Request (Gemini Format)
-    ↓
-Gemini Routes (src/api/gemini_routes.py)
-    ↓
-GeminiModelMapper (参数映射)
-    ↓
-GenerationHandler (复用原有生成逻辑)
-    ↓
-GeminiResponseFormatter (响应格式转换)
-    ↓
-Client Response (Gemini Format)
-```
-
-### 非侵入式设计
-
-- 所有 Gemini 兼容代码位于独立文件，不修改原有 `/v1/chat/completions` 逻辑
-- 复用现有的 `GenerationHandler` 进行实际生成
-- 复用现有的 `Task` 数据库存储视频 operation 状态
-- 复用现有的文件缓存机制
-
----
-
-## 测试示例
-
-### 测试图片生成
-
-```bash
-# 测试基本图片生成
-curl -X POST "http://localhost:8000/v1beta/models/gemini-3-pro-image-preview:generateContent" \
+curl -X POST "http://localhost:8000/v1beta/models/veo_3_1_t2v_fast_landscape:predictLongRunning" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "contents": [{"parts": [{"text": "a beautiful sunset over the ocean"}]}]
-  }'
-
-# 测试 4K 图片生成
-curl -X POST "http://localhost:8000/v1beta/models/gemini-3.1-flash-image-preview:generateContent" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [{"parts": [{"text": "futuristic cityscape"}]}],
-    "generationConfig": {"aspectRatio": "1:1", "imageSize": "4K"}
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "一只猫在草地上奔跑，镜头平稳推进"
+          }
+        ]
+      }
+    ],
+    "generationConfig": {
+      "videoConfig": {
+        "aspectRatio": "16:9",
+        "resolution": "1080p"
+      }
+    }
   }'
 ```
 
-### 测试视频生成
+## 6. 模型查询接口说明
 
-```bash
-# 1. 提交视频生成任务
-OPERATION=$(curl -s -X POST "http://localhost:8000/v1beta/models/veo-3.1-generate-preview:predictLongRunning" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "instances": [{"prompt": "a cat playing with a ball", "aspectRatio": "16:9", "resolution": "720p"}]
-  }' | jq -r '.name')
+### `GET /v1beta/models`
 
-echo "Operation: $OPERATION"
+当前返回内容由两部分组成：
 
-# 2. 轮询查询状态（循环执行直到 done: true）
-curl "http://localhost:8000/v1beta/$OPERATION" \
-  -H "Authorization: Bearer YOUR_API_KEY"
-```
+- 图片模型：Gemini 风格官方名
+- 视频模型：本地 `MODEL_CONFIG` 视频模型名
 
----
+这意味着返回列表不是“纯官方 Gemini 模型集合”，而是“本项目当前 Gemini 兼容层可调用模型集合”。
 
-## 更新日志
+### `GET /v1beta/models/{model}`
 
-### 2025-03-01
+当前支持：
 
-- 初始版本发布
-- 支持 Gemini Image 生成 (generateContent)
-- 支持 Veo 视频生成 (predictLongRunning)
-- 支持模型列表查询
+- 图片：`gemini-2.5-flash-image` 这类 Gemini 名称
+- 视频：`veo_3_1_t2v_fast_landscape` 这类本地模型名
+
+## 7. 已知差异与注意事项
+
+### 与官方 Gemini API 的主要差异
+
+1. 图片接口较接近官方，但不是完整实现。
+2. 视频接口当前已经不是官方 Veo 原始协议：
+   - 不再用官方视频模型名
+   - 不再用 `instances` / `parameters`
+   - 不再提供轮询查询
+3. `/models` 返回的是“兼容层可用模型”，不是“官方 Gemini 全量模型”。
+
+### 调用建议
+
+1. 图片场景优先按本文档中的实际可用比例和尺寸调用，不要只看官方文档。
+2. 视频场景先请求 `GET /v1beta/models` 获取当前服务暴露的真实模型名。
+3. 如果要选 `1080p` / `4k`，优先直接选择带对应后缀的本地视频模型。
+
+## 8. 推荐的最小心智模型
+
+- 图片：`Gemini 风格模型名 + Gemini 风格请求体`
+- 视频：`Flow2API 本地模型名 + Gemini 风格外壳`
+
+如果后续要把视频接口重新对齐官方 Veo 协议，需要同时恢复三部分能力：
+
+- 官方视频模型别名映射
+- `instances` / `parameters` 请求结构
+- `GET /v1beta/operations/{id}` 异步轮询

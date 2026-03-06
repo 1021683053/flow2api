@@ -11,8 +11,6 @@ from fastapi import HTTPException
 from ..core.gemini_mapping import (
     GEMINI_IMAGE_MODEL_MAP,
     GEMINI_IMAGE_SIZE_MAP,
-    GEMINI_VIDEO_MODEL_MAP,
-    GEMINI_VIDEO_RESOLUTION_MAP,
 )
 
 
@@ -65,9 +63,6 @@ class GeminiModelMapper:
                     }
                 }
             )
-
-        # Get internal aspect ratio constant
-        internal_ratio = model_config["ratio_map"][aspect_ratio]
 
         # Map Gemini model name to internal model prefix
         # gemini-3-pro-image-preview -> gemini-3.0-pro-image
@@ -142,76 +137,6 @@ class GeminiModelMapper:
         return internal_model_id, upsample
 
     @staticmethod
-    def map_video_model(
-        gemini_model: str,
-        aspect_ratio: str = "16:9",
-        resolution: Optional[str] = None
-    ) -> Tuple[str, Optional[Dict[str, str]]]:
-        """
-        Map Gemini video model parameters to internal model configuration.
-
-        Args:
-            gemini_model: Gemini model name (e.g., "veo-3.1-generate-preview")
-            aspect_ratio: Aspect ratio ("16:9" or "9:16")
-            resolution: Resolution (e.g., "720p", "1080p", "4k")
-
-        Returns:
-            Tuple of (internal_model_key, upsample_config)
-
-        Raises:
-            HTTPException: If model or aspect ratio is not supported
-        """
-        if gemini_model not in GEMINI_VIDEO_MODEL_MAP:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": {
-                        "code": 400,
-                        "message": f"Unsupported Gemini video model: {gemini_model}. "
-                                   f"Supported: {list(GEMINI_VIDEO_MODEL_MAP.keys())}"
-                    }
-                }
-            )
-
-        model_config = GEMINI_VIDEO_MODEL_MAP[gemini_model]
-
-        # Validate aspect ratio
-        if aspect_ratio not in model_config["ratio_map"]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": {
-                        "code": 400,
-                        "message": f"Aspect ratio '{aspect_ratio}' not supported by {gemini_model}. "
-                                   f"Supported: {list(model_config['ratio_map'].keys())}"
-                    }
-                }
-            )
-
-        # Get internal model key
-        internal_model_id = model_config["ratio_map"][aspect_ratio]
-
-        # Map resolution to upsample config
-        upsample = None
-        if resolution and resolution != "720p":
-            if resolution not in GEMINI_VIDEO_RESOLUTION_MAP:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": {
-                            "code": 400,
-                            "message": f"Invalid resolution: {resolution}. Supported: {list(GEMINI_VIDEO_RESOLUTION_MAP.keys())}"
-                        }
-                    }
-                )
-            upsample = GEMINI_VIDEO_RESOLUTION_MAP[resolution]
-            # Append resolution suffix to model ID for MODEL_CONFIG lookup
-            # e.g., veo_3_1_t2v_fast -> veo_3_1_t2v_fast_1080p
-            internal_model_id = f"{internal_model_id}_{resolution.lower()}"
-
-        return internal_model_id, upsample
-
-    @staticmethod
     def get_model_info(gemini_model: str) -> Optional[Dict[str, Any]]:
         """Get model information for a Gemini model"""
         if gemini_model in GEMINI_IMAGE_MODEL_MAP:
@@ -220,13 +145,6 @@ class GeminiModelMapper:
                 "type": "image",
                 "model_name": config["model_name"],
                 "supported_ratios": config["supported_ratios"]
-            }
-        elif gemini_model in GEMINI_VIDEO_MODEL_MAP:
-            config = GEMINI_VIDEO_MODEL_MAP[gemini_model]
-            return {
-                "type": "video",
-                "video_type": config["video_type"],
-                "supported_ratios": list(config["ratio_map"].keys())
             }
         return None
 

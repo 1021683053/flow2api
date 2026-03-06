@@ -50,55 +50,5 @@ GEMINI_IMAGE_SIZE_MAP = {
     "4K": "UPSAMPLE_IMAGE_RESOLUTION_4K",
 }
 
-# Gemini Video Model Mapping
-# Maps Gemini video model names to internal model keys and supported aspect ratios
-GEMINI_VIDEO_MODEL_MAP = {
-    # 官方模型: veo-3.1-generate-preview -> 对应内部模型
-    "veo-3.1-generate-preview": {
-        "video_type": "t2v",
-        "ratio_map": {
-            "16:9": "veo_3_1_t2v_fast",
-            "9:16": "veo_3_1_t2v_fast_portrait",
-        }
-    },
-    # 官方模型: veo-3.1-fast-preview -> 对应内部模型 (注意：官方叫 fast-preview，不是 fast-generate-preview)
-    "veo-3.1-fast-preview": {
-        "video_type": "t2v",
-        "ratio_map": {
-            "16:9": "veo_3_1_t2v_fast_ultra",
-            "9:16": "veo_3_1_t2v_fast_portrait_ultra",
-        }
-    },
-    # 官方模型: veo-3 -> 对应内部模型
-    "veo-3": {
-        "video_type": "t2v",
-        "ratio_map": {
-            "16:9": "veo_3_1_t2v_fast",
-            "9:16": "veo_3_1_t2v_fast_portrait",
-        }
-    },
-    # 官方模型: veo-2 -> 对应内部模型 (注意：官方叫 veo-2，不是 veo-2.0-generate-001)
-    "veo-2": {
-        "video_type": "t2v",
-        "ratio_map": {
-            "16:9": "veo_2_0_t2v",
-            "9:16": "veo_2_0_t2v_portrait",
-        }
-    }
-}
-
-# Video resolution mapping to upsample configuration
-GEMINI_VIDEO_RESOLUTION_MAP = {
-    "720p": None,  # No upsample, original resolution
-    "1080p": {
-        "resolution": "VIDEO_RESOLUTION_1080P",
-        "model_key": "veo_3_1_upsampler_1080p"
-    },
-    "4k": {
-        "resolution": "VIDEO_RESOLUTION_4K",
-        "model_key": "veo_3_1_upsampler_4k"
-    }
-}
-
 # All supported Gemini models for listing
-GEMINI_SUPPORTED_MODELS = list(GEMINI_IMAGE_MODEL_MAP.keys()) + list(GEMINI_VIDEO_MODEL_MAP.keys())
+GEMINI_SUPPORTED_MODELS = list(GEMINI_IMAGE_MODEL_MAP.keys())

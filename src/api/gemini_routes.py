@@ -6,7 +6,6 @@ All endpoints are prefixed with /v1beta in main.py.
 Endpoints:
 - POST /models/{model}:generateContent - Image generation
 - POST /models/{model}:predictLongRunning - Video generation
-- GET /operations/{operation_id} - Get operation status
 - GET /models - List available models
 - GET /models/{model} - Get model information
 """
@@ -14,20 +13,18 @@ Endpoints:
 import base64
 import json
 import re
-import time
 import uuid
-from pathlib import Path
 from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..core.auth import verify_api_key_header
-from ..core.gemini_mapping import GEMINI_IMAGE_MODEL_MAP, GEMINI_VIDEO_MODEL_MAP
+from ..core.gemini_mapping import GEMINI_IMAGE_MODEL_MAP
 from ..core.logger import debug_logger
-from ..services.generation_handler import GenerationHandler
+from ..services.generation_handler import GenerationHandler, MODEL_CONFIG
 from ..services.gemini_formatter import GeminiModelMapper, GeminiResponseFormatter
 
 router = APIRouter()
@@ -92,32 +89,21 @@ class GeminiGenerateContentRequest(BaseModel):
     safetySettings: Optional[List[GeminiSafetySetting]] = None
 
 
-class GeminiVideoImageInput(BaseModel):
-    """Image input for video generation (i2v)"""
-    bytesBase64Encoded: Optional[str] = None
-    mimeType: Optional[str] = None
+class GeminiVideoConfig(BaseModel):
+    """Video generation configuration (nested in generationConfig)"""
+    aspectRatio: Optional[str] = None
+    resolution: Optional[str] = None
 
 
-class GeminiPredictInstance(BaseModel):
-    """Single prediction instance for video generation (官方格式)"""
-    prompt: Optional[str] = None  # 对于 i2v 可能为空
-    image: Optional[GeminiVideoImageInput] = None  # 可选，用于 i2v
-
-
-class GeminiPredictParameters(BaseModel):
-    """Parameters for video generation (官方格式)"""
-    aspectRatio: Optional[str] = "16:9"  # "16:9", "9:16"
-    resolution: Optional[str] = "720p"  # "720p", "1080p", "4k"
-    duration: Optional[str] = "8s"  # "4s", "8s"
-    negativePrompt: Optional[str] = None
-    numberOfVideos: Optional[int] = 1
-    personGeneration: Optional[str] = None  # "allow_adult", "dont_allow"
+class GeminiVideoGenerationConfig(BaseModel):
+    """Generation configuration for video generation"""
+    videoConfig: Optional[GeminiVideoConfig] = None
 
 
 class GeminiPredictLongRunningRequest(BaseModel):
-    """Gemini predictLongRunning request body (官方格式)"""
-    instances: List[GeminiPredictInstance]
-    parameters: Optional[GeminiPredictParameters] = None
+    """Gemini predictLongRunning request body (简化格式，contents 对齐 image)"""
+    contents: List[GeminiContent]
+    generationConfig: Optional[GeminiVideoGenerationConfig] = None
 
 
 # ========== Helper Functions ==========
@@ -210,7 +196,7 @@ def is_image_model(model: str) -> bool:
 
 def is_video_model(model: str) -> bool:
     """Check if model is a video generation model"""
-    return model in GEMINI_VIDEO_MODEL_MAP
+    return model in MODEL_CONFIG and MODEL_CONFIG[model].get("type") == "video"
 
 
 # ========== Image Generation Endpoint ==========
@@ -236,7 +222,7 @@ GEMINI_SUPPORTED_VIDEO_RESOLUTIONS = ["720p", "1080p", "4k"]
 async def gemini_generate_content(
     model: str = Path(..., description="Gemini model name"),
     request: GeminiGenerateContentRequest = None,
-    api_key: str = Depends(verify_api_key_header)
+    _api_key: str = Depends(verify_api_key_header)
 ):
     """
     Gemini API compatible image generation endpoint.
@@ -358,7 +344,7 @@ async def gemini_generate_content(
                 )
 
         # Map to internal model
-        internal_model_id, upsample = gemini_mapper.map_image_model(
+        internal_model_id, _upsample = gemini_mapper.map_image_model(
             gemini_model=model,
             aspect_ratio=aspect_ratio,
             image_size=image_size
@@ -506,43 +492,21 @@ async def gemini_generate_content(
 
 @router.post("/models/{model}:predictLongRunning")
 async def gemini_predict_long_running(
-    model: str = Path(..., description="Gemini video model name"),
+    model: str = Path(..., description="Local video model name"),
     request: GeminiPredictLongRunningRequest = None,
-    wait: bool = Query(False, description="Wait for generation to complete (synchronous mode)"),
-    timeout: int = Query(300, description="Timeout in seconds for wait mode (max 600)"),
-    api_key: str = Depends(verify_api_key_header)
+    _api_key: str = Depends(verify_api_key_header)
 ):
     """
-    Gemini API compatible video generation endpoint.
+    Gemini API compatible video generation endpoint (synchronous only).
 
-    Supported models (official names):
-    - veo-3.1-generate-preview (aspect ratios: 16:9, 9:16; resolutions: 720p, 1080p, 4k)
-    - veo-3.1-fast-preview (aspect ratios: 16:9, 9:16; resolutions: 720p, 1080p, 4k)
-    - veo-3 (aspect ratios: 16:9, 9:16; resolutions: 720p, 1080p, 4k)
-    - veo-2 (aspect ratios: 16:9, 9:16; resolutions: 720p, 1080p, 4k)
-
-    Returns an operation that must be polled via GET /operations/{operation_id}
-
-    Official API parameters (in request.parameters):
-    - aspectRatio: "16:9" or "9:16" (default: "16:9")
-    - resolution: "720p", "1080p", or "4k" (default: "720p")
-    - duration: "4s" or "8s" (default: "8s") - NOT SUPPORTED, will throw error
-    - negativePrompt: string - NOT SUPPORTED, will throw error
-    - numberOfVideos: integer (default: 1) - NOT SUPPORTED, will throw error
-    - personGeneration: "allow_adult" or "dont_allow" - NOT SUPPORTED, will throw error
-
-    Note: Image-to-video (i2v) is supported by providing image in instances[0].image.bytesBase64Encoded
-
-    Extension (non-official):
-    - wait: If true, wait for generation to complete before returning (synchronous mode)
-    - timeout: Max wait time in seconds (10-600, default: 300) when wait=true
-
-    Example with wait:
-        POST /v1beta/models/veo-3:predictLongRunning?wait=true&timeout=300
+    Request format (aligned with image endpoint):
+    {
+      "contents": [{"parts": [{"text": "..."}, {"inlineData": {"mimeType": "image/jpeg", "data": "..."}}]}]
+    }
     """
     try:
-        # Validate this is a video model
-        if not is_video_model(model):
+        # Validate this is a local video model
+        if model not in MODEL_CONFIG or MODEL_CONFIG[model].get("type") != "video":
             if is_image_model(model):
                 raise HTTPException(
                     status_code=400,
@@ -551,400 +515,185 @@ async def gemini_predict_long_running(
                         400
                     )
                 )
+
+            supported_video_models = sorted([
+                model_name for model_name, config in MODEL_CONFIG.items()
+                if config.get("type") == "video"
+            ])
             raise HTTPException(
                 status_code=400,
                 detail=response_formatter.format_error_response(
-                    f"Unknown model: {model}. Supported video models: {list(GEMINI_VIDEO_MODEL_MAP.keys())}",
+                    f"Unknown video model: {model}. Supported local video models: {supported_video_models}",
                     400
                 )
             )
 
-        if not request.instances:
+        if not request.contents:
             raise HTTPException(
                 status_code=400,
-                detail=response_formatter.format_error_response("instances cannot be empty", 400)
+                detail=response_formatter.format_error_response("contents cannot be empty", 400)
             )
 
-        # Get first instance (Gemini video API typically uses single instance)
-        instance = request.instances[0]
+        # Extract prompt (optional for i2v)
+        prompt_parts: List[str] = []
+        for content in request.contents:
+            for part in content.parts:
+                if part.text:
+                    prompt_parts.append(part.text)
+        prompt = " ".join(prompt_parts).strip()
 
-        # Extract prompt from instance
-        prompt = instance.prompt or ""
+        # Extract image input from inlineData (optional)
+        images = extract_reference_images_from_contents(request.contents)
 
-        # Extract image for i2v (image-to-video) if provided
-        image_bytes = None
-        if instance.image and instance.image.bytesBase64Encoded:
-            try:
-                image_bytes = base64.b64decode(instance.image.bytesBase64Encoded)
-            except Exception as e:
+        # Parse generationConfig.videoConfig (optional, validated but not mapped)
+        aspect_ratio = None
+        resolution = None
+        if request.generationConfig and request.generationConfig.videoConfig:
+            video_config = request.generationConfig.videoConfig
+            aspect_ratio = video_config.aspectRatio
+            resolution = video_config.resolution
+
+            if aspect_ratio and aspect_ratio not in GEMINI_SUPPORTED_VIDEO_ASPECT_RATIOS:
                 raise HTTPException(
                     status_code=400,
                     detail=response_formatter.format_error_response(
-                        f"Invalid base64 image data: {str(e)}", 400
-                    )
-                )
-
-        # Validate prompt is provided for t2v (text-to-video)
-        # For i2v, prompt is optional
-        if not prompt and not image_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail=response_formatter.format_error_response(
-                    "Either prompt or image must be provided", 400
-                )
-            )
-
-        # Extract parameters from parameters field (official API format)
-        aspect_ratio = "16:9"
-        resolution = "720p"
-
-        if request.parameters:
-            aspect_ratio = request.parameters.aspectRatio or "16:9"
-            resolution = request.parameters.resolution or "720p"
-
-            # Validate unsupported parameters
-            unsupported_params = []
-
-            if request.parameters.duration and request.parameters.duration != "8s":
-                # duration is not supported - we always generate 8s videos
-                unsupported_params.append(f"duration={request.parameters.duration} (only 8s is supported)")
-
-            if request.parameters.negativePrompt:
-                unsupported_params.append("negativePrompt")
-
-            if request.parameters.numberOfVideos and request.parameters.numberOfVideos != 1:
-                unsupported_params.append(f"numberOfVideos={request.parameters.numberOfVideos} (only 1 is supported)")
-
-            if request.parameters.personGeneration:
-                unsupported_params.append(f"personGeneration={request.parameters.personGeneration}")
-
-            if unsupported_params:
-                raise HTTPException(
-                    status_code=400,
-                    detail=response_formatter.format_error_response(
-                        f"Unsupported parameters: {', '.join(unsupported_params)}",
+                        f"Invalid aspectRatio: {aspect_ratio}. "
+                        f"Supported values: {GEMINI_SUPPORTED_VIDEO_ASPECT_RATIOS}",
                         400
                     )
                 )
 
-        # Validate aspect ratio
-        if aspect_ratio not in GEMINI_SUPPORTED_VIDEO_ASPECT_RATIOS:
+            if resolution and resolution not in GEMINI_SUPPORTED_VIDEO_RESOLUTIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=response_formatter.format_error_response(
+                        f"Invalid resolution: {resolution}. "
+                        f"Supported values: {GEMINI_SUPPORTED_VIDEO_RESOLUTIONS}",
+                        400
+                    )
+                )
+
+        # Must have at least one input type
+        if not prompt and not images:
             raise HTTPException(
                 status_code=400,
                 detail=response_formatter.format_error_response(
-                    f"Invalid aspectRatio: {aspect_ratio}. "
-                    f"Supported values: {GEMINI_SUPPORTED_VIDEO_ASPECT_RATIOS}",
+                    "Either text or inlineData image must be provided in contents.parts",
                     400
                 )
             )
-
-        # Validate resolution
-        if resolution not in GEMINI_SUPPORTED_VIDEO_RESOLUTIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=response_formatter.format_error_response(
-                    f"Invalid resolution: {resolution}. "
-                    f"Supported values: {GEMINI_SUPPORTED_VIDEO_RESOLUTIONS}",
-                    400
-                )
-            )
-
-        # Map to internal model
-        internal_model_id, upsample = gemini_mapper.map_video_model(
-            gemini_model=model,
-            aspect_ratio=aspect_ratio,
-            resolution=resolution
-        )
 
         debug_logger.log_info(
-            f"[Gemini] Video generation: model={model}, internal={internal_model_id}, "
+            f"[Gemini] Video generation: model={model}, "
             f"prompt={prompt[:50] if prompt else '(empty)'}..., "
-            f"aspect_ratio={aspect_ratio}, resolution={resolution}, "
-            f"has_image={image_bytes is not None}"
+            f"image_count={len(images) if images else 0}, "
+            f"aspect_ratio={aspect_ratio}, resolution={resolution}"
         )
 
-        # Generate unique operation ID
+        # Run generation synchronously and parse stream chunks
         operation_id = f"operations/{uuid.uuid4().hex}"
 
-        # Get a token for the operation
-        token = await generation_handler.load_balancer.select_token(for_video_generation=True)
-        if not token:
+        # Optional consistency check: if model ratio is fixed, validate against request config
+        model_aspect_ratio = MODEL_CONFIG[model].get("aspect_ratio")
+        if aspect_ratio and model_aspect_ratio == "VIDEO_ASPECT_RATIO_LANDSCAPE" and aspect_ratio != "16:9":
             raise HTTPException(
-                status_code=503,
+                status_code=400,
                 detail=response_formatter.format_error_response(
-                    "No available token for video generation", 503
+                    f"Model {model} only supports aspectRatio 16:9", 400
                 )
             )
-
-        # Create a pending task entry
-        from ..core.models import Task
-        task = Task(
-            task_id=operation_id,
-            token_id=token.id,
-            model=internal_model_id,
-            prompt=prompt if prompt else "(image-to-video)",
-            status="pending",
-            progress=0,
-            scene_id=None
-        )
-        await generation_handler.db.create_task(task)
-
-        # Start video generation in background
-        import asyncio
-        asyncio.create_task(
-            _process_video_generation(
-                operation_id=operation_id,
-                internal_model_id=internal_model_id,
-                prompt=prompt,
-                token=token,
-                image_bytes=image_bytes
+        if aspect_ratio and model_aspect_ratio == "VIDEO_ASPECT_RATIO_PORTRAIT" and aspect_ratio != "9:16":
+            raise HTTPException(
+                status_code=400,
+                detail=response_formatter.format_error_response(
+                    f"Model {model} only supports aspectRatio 9:16", 400
+                )
             )
-        )
-
-        # If wait=true, wait for completion
-        if wait:
-            debug_logger.log_info(f"[Gemini] Wait mode enabled, waiting for {operation_id} to complete...")
-
-            # Validate timeout
-            timeout = min(max(timeout, 10), 600)  # Clamp between 10s and 600s
-
-            start_time = asyncio.get_event_loop().time()
-            poll_interval = 2  # Poll every 2 seconds
-
-            while True:
-                # Check timeout
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed > timeout:
-                    # Return operation (still processing) with timeout warning
-                    response_data = response_formatter.format_video_operation(operation_id)
-                    response_data["metadata"]["waitTimeout"] = True
-                    debug_logger.log_warning(f"[Gemini] Wait timeout for {operation_id} after {timeout}s")
-                    return JSONResponse(content=response_data)
-
-                # Query task status
-                task = await generation_handler.db.get_task(operation_id)
-                if not task:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=response_formatter.format_error_response(
-                            "Task disappeared during wait", 500
-                        )
-                    )
-
-                if task.status == "completed":
-                    # Return completed result
-                    result_urls = task.result_urls or []
-                    response_data = response_formatter.format_operation_result(
-                        operation_name=operation_id,
-                        done=True,
-                        result_urls=result_urls
-                    )
-                    debug_logger.log_info(f"[Gemini] Wait completed for {operation_id} in {elapsed:.1f}s")
-                    return JSONResponse(content=response_data)
-
-                elif task.status == "failed":
-                    # Return error
-                    response_data = response_formatter.format_operation_result(
-                        operation_name=operation_id,
-                        done=True,
-                        error_message=task.error_message or "Video generation failed"
-                    )
-                    debug_logger.log_error(f"[Gemini] Wait failed for {operation_id}: {task.error_message}")
-                    return JSONResponse(content=response_data)
-
-                # Still processing, wait and poll again
-                await asyncio.sleep(poll_interval)
-
-        # Return operation response immediately (官方格式)
-        response_data = response_formatter.format_video_operation(operation_id)
-        return JSONResponse(content=response_data)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        debug_logger.log_error(f"[Gemini] Video generation error: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=response_formatter.format_error_response(str(e), 500)
-        )
-
-
-async def _process_video_generation(
-    operation_id: str,
-    internal_model_id: str,
-    prompt: str,
-    token: Any,
-    image_bytes: Optional[bytes] = None
-):
-    """Background task to process video generation"""
-    try:
-        debug_logger.log_info(f"[Gemini] Starting video generation for operation {operation_id}")
-
-        # Update task status to processing
-        await generation_handler.db.update_task(
-            operation_id,
-            status="processing",
-            progress=10
-        )
-
-        # Call generation handler with stream=True to get actual generation result
         result_url = None
         error_messages = []
         all_chunks = []
 
         async for chunk in generation_handler.handle_generation(
-            model=internal_model_id,
+            model=model,
             prompt=prompt,
-            images=[image_bytes] if image_bytes else None,
+            images=images,
             stream=True
         ):
             all_chunks.append(chunk)
 
-            # Parse result to extract video URL
             chunk_str = chunk.strip()
             if chunk_str.startswith("data: "):
                 chunk_str = chunk_str[6:]
 
             try:
                 result_data = json.loads(chunk_str)
-                # Check for error in chunk
+
                 if "error" in result_data:
                     error_msg = result_data["error"].get("message", "Unknown error")
                     error_messages.append(error_msg)
                     continue
 
-                # Try to extract video URL
                 delta = result_data.get("choices", [{}])[0].get("delta", {})
                 content = delta.get("content", "")
                 if not content:
                     content = result_data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-                # Extract video URL from HTML format
                 url_match = re.search(r"src='([^']+)'", content)
                 if url_match:
                     result_url = url_match.group(1)
-            except (json.JSONDecodeError, IndexError):
-                # Check if raw chunk contains error indicators
+            except (json.JSONDecodeError, IndexError, TypeError):
                 chunk_lower = chunk.lower()
-                if any(err in chunk_lower for err in ["error", "失败", "错误", "captcha", "验证码", "403", "401"]):
+                if any(err in chunk_lower for err in ["error", "失败", "错误", "captcha", "验证码", "403", "401", "429"]):
                     error_messages.append(chunk[:200])
                 continue
 
-        # Update task with result
         if result_url:
-            await generation_handler.db.update_task(
-                operation_id,
-                status="completed",
-                progress=100,
-                result_urls=[result_url],
-                completed_at=time.time()
-            )
-            debug_logger.log_info(f"[Gemini] Video generation completed for operation {operation_id}: {result_url}")
-        else:
-            # Build detailed error message
-            if error_messages:
-                combined_error = "; ".join(error_messages[:3])
-                error_detail = f"Video generation failed: {combined_error}"
-            else:
-                # Include raw chunks for debugging
-                raw_preview = " | ".join([c[:100] for c in all_chunks[-3:]])
-                error_detail = f"No video URL found. Raw response preview: {raw_preview[:500]}"
-
-            await generation_handler.db.update_task(
-                operation_id,
-                status="failed",
-                error_message=error_detail,
-                completed_at=time.time()
-            )
-            debug_logger.log_error(f"[Gemini] Video generation failed for operation {operation_id}: {error_detail}")
-
-    except Exception as e:
-        debug_logger.log_error(f"[Gemini] Background video generation error: {str(e)}")
-        try:
-            await generation_handler.db.update_task(
-                operation_id,
-                status="failed",
-                error_message=str(e),
-                completed_at=time.time()
-            )
-        except:
-            pass
-
-
-@router.get("/operations/{operation_id:path}")
-async def gemini_get_operation(
-    operation_id: str = Path(..., description="Operation ID (format: operations/xxx)"),
-    api_key: str = Depends(verify_api_key_header)
-):
-    """
-    Get long-running operation status and result.
-
-    Use this endpoint to poll for video generation completion.
-    """
-    try:
-        # Validate operation ID format
-        if not operation_id.startswith("operations/"):
-            raise HTTPException(
-                status_code=400,
-                detail=response_formatter.format_error_response(
-                    "Invalid operation ID format. Expected: operations/xxx", 400
-                )
-            )
-
-        # Query task from database
-        task = await generation_handler.db.get_task(operation_id)
-
-        if not task:
-            raise HTTPException(
-                status_code=404,
-                detail=response_formatter.format_error_response(
-                    f"Operation {operation_id} not found", 404
-                )
-            )
-
-        # Format response based on task status
-        if task.status == "completed":
-            result_urls = task.result_urls or []
             response_data = response_formatter.format_operation_result(
                 operation_name=operation_id,
                 done=True,
-                result_urls=result_urls
+                result_urls=[result_url]
             )
-        elif task.status == "failed":
+            return JSONResponse(content=response_data)
+
+        if error_messages:
+            combined_error = "; ".join(error_messages[:3])
             response_data = response_formatter.format_operation_result(
                 operation_name=operation_id,
                 done=True,
-                error_message=task.error_message or "Video generation failed"
+                error_message=f"Video generation failed: {combined_error}"
             )
-        else:
-            # Still processing
-            response_data = response_formatter.format_operation_result(
-                operation_name=operation_id,
-                done=False
-            )
+            return JSONResponse(content=response_data)
 
+        raw_preview = " | ".join([c[:100] for c in all_chunks[-3:]]) if all_chunks else ""
+        response_data = response_formatter.format_operation_result(
+            operation_name=operation_id,
+            done=True,
+            error_message=f"No video URL found. Raw response preview: {raw_preview[:500]}"
+        )
         return JSONResponse(content=response_data)
 
     except HTTPException:
         raise
     except Exception as e:
-        debug_logger.log_error(f"[Gemini] Get operation error: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=response_formatter.format_error_response(str(e), 500)
+        debug_logger.log_error(f"[Gemini] Video generation error: {str(e)}")
+        response_data = response_formatter.format_operation_result(
+            operation_name=f"operations/{uuid.uuid4().hex}",
+            done=True,
+            error_message=str(e)
         )
+        return JSONResponse(content=response_data)
 
 
 # ========== List Models Endpoints ==========
 
 @router.get("/models")
 async def gemini_list_models(
-    api_key: str = Depends(verify_api_key_header)
+    _api_key: str = Depends(verify_api_key_header)
 ):
     """List available Gemini models"""
     models: List[Dict[str, Any]] = []
 
-    # Image models
+    # Image models (official Gemini names)
     for model_name, config in GEMINI_IMAGE_MODEL_MAP.items():
         models.append(response_formatter.format_model_info(
             model_name=model_name,
@@ -954,13 +703,21 @@ async def gemini_list_models(
             generation_methods=["generateContent"]
         ))
 
-    # Video models
-    for model_name, config in GEMINI_VIDEO_MODEL_MAP.items():
+    # Video models (local model names)
+    for model_name in sorted([k for k, v in MODEL_CONFIG.items() if v.get("type") == "video"]):
+        model_config = MODEL_CONFIG[model_name]
+        aspect_ratio = model_config.get("aspect_ratio")
+        supported_ratios: List[str] = []
+        if aspect_ratio == "VIDEO_ASPECT_RATIO_LANDSCAPE":
+            supported_ratios = ["16:9"]
+        elif aspect_ratio == "VIDEO_ASPECT_RATIO_PORTRAIT":
+            supported_ratios = ["9:16"]
+
+        ratio_desc = f" Supported ratios: {', '.join(supported_ratios)}" if supported_ratios else ""
         models.append(response_formatter.format_model_info(
             model_name=model_name,
-            display_name=model_name.replace("-", " ").title(),
-            description=f"Video generation model. "
-                       f"Supported ratios: {', '.join(config['ratio_map'].keys())}",
+            display_name=model_name.replace("_", " ").title(),
+            description=f"Local video generation model ({model_config.get('video_type', 'video')}).{ratio_desc}",
             generation_methods=["predictLongRunning"]
         ))
 
@@ -970,21 +727,14 @@ async def gemini_list_models(
 @router.get("/models/{model}")
 async def gemini_get_model(
     model: str = Path(..., description="Model name"),
-    api_key: str = Depends(verify_api_key_header)
+    _api_key: str = Depends(verify_api_key_header)
 ):
     """Get specific model information"""
     # Remove 'models/' prefix if present
     model_name = model.replace("models/", "")
 
-    model_info = gemini_mapper.get_model_info(model_name)
-
-    if not model_info:
-        raise HTTPException(
-            status_code=404,
-            detail=response_formatter.format_error_response(f"Model {model} not found", 404)
-        )
-
-    if model_info["type"] == "image":
+    if model_name in GEMINI_IMAGE_MODEL_MAP:
+        model_info = gemini_mapper.get_model_info(model_name)
         response_data = response_formatter.format_model_info(
             model_name=model_name,
             display_name=model_name.replace("-", " ").title(),
@@ -992,13 +742,27 @@ async def gemini_get_model(
                        f"Supported ratios: {', '.join(model_info['supported_ratios'])}",
             generation_methods=["generateContent"]
         )
-    else:
+        return JSONResponse(content=response_data)
+
+    if model_name in MODEL_CONFIG and MODEL_CONFIG[model_name].get("type") == "video":
+        model_config = MODEL_CONFIG[model_name]
+        aspect_ratio = model_config.get("aspect_ratio")
+        supported_ratios: List[str] = []
+        if aspect_ratio == "VIDEO_ASPECT_RATIO_LANDSCAPE":
+            supported_ratios = ["16:9"]
+        elif aspect_ratio == "VIDEO_ASPECT_RATIO_PORTRAIT":
+            supported_ratios = ["9:16"]
+
+        ratio_desc = f" Supported ratios: {', '.join(supported_ratios)}" if supported_ratios else ""
         response_data = response_formatter.format_model_info(
             model_name=model_name,
-            display_name=model_name.replace("-", " ").title(),
-            description=f"Video generation model. "
-                       f"Supported ratios: {', '.join(model_info['supported_ratios'])}",
+            display_name=model_name.replace("_", " ").title(),
+            description=f"Local video generation model ({model_config.get('video_type', 'video')}).{ratio_desc}",
             generation_methods=["predictLongRunning"]
         )
+        return JSONResponse(content=response_data)
 
-    return JSONResponse(content=response_data)
+    raise HTTPException(
+        status_code=404,
+        detail=response_formatter.format_error_response(f"Model {model} not found", 404)
+    )

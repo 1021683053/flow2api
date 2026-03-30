@@ -1,0 +1,348 @@
+"""Gemini API response formatters and model mapper
+
+This module provides:
+1. GeminiModelMapper - Maps Gemini API parameters to internal Flow2API configurations
+2. GeminiResponseFormatter - Formats internal responses to Gemini API format
+"""
+
+from typing import Tuple, Optional, Dict, Any, List
+from fastapi import HTTPException
+
+from ..core.gemini_mapping import (
+    GEMINI_IMAGE_MODEL_MAP,
+    GEMINI_IMAGE_SIZE_MAP,
+)
+
+
+class GeminiModelMapper:
+    """Maps Gemini API model names and parameters to internal Flow2API configuration"""
+
+    @staticmethod
+    def map_image_model(
+        gemini_model: str,
+        aspect_ratio: str = "16:9",
+        image_size: Optional[str] = None
+    ) -> Tuple[str, Optional[str]]:
+        """
+        Map Gemini image model parameters to internal model configuration.
+
+        Args:
+            gemini_model: Gemini model name (e.g., "gemini-3-pro-image-preview")
+            aspect_ratio: Aspect ratio (e.g., "16:9", "1:1")
+            image_size: Image size (e.g., "1K", "2K", "4K")
+
+        Returns:
+            Tuple of (internal_model_id, upsample_config)
+
+        Raises:
+            HTTPException: If model or aspect ratio is not supported
+        """
+        if gemini_model not in GEMINI_IMAGE_MODEL_MAP:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "code": 400,
+                        "message": f"Unsupported Gemini image model: {gemini_model}. "
+                                   f"Supported: {list(GEMINI_IMAGE_MODEL_MAP.keys())}"
+                    }
+                }
+            )
+
+        model_config = GEMINI_IMAGE_MODEL_MAP[gemini_model]
+
+        # Validate aspect ratio
+        if aspect_ratio not in model_config["supported_ratios"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "code": 400,
+                        "message": f"Aspect ratio '{aspect_ratio}' not supported by {gemini_model}. "
+                                   f"Supported: {model_config['supported_ratios']}"
+                    }
+                }
+            )
+
+        # Map Gemini model name to internal model prefix
+        # gemini-3-pro-image-preview -> gemini-3.0-pro-image
+        # gemini-2.5-flash-image -> gemini-2.5-flash-image (no change)
+        # gemini-3.1-flash-image-preview -> gemini-3.1-flash-image
+        if gemini_model == "gemini-3-pro-image-preview":
+            model_prefix = "gemini-3.0-pro-image"
+        elif gemini_model == "gemini-3.1-flash-image-preview":
+            model_prefix = "gemini-3.1-flash-image"
+        else:
+            model_prefix = gemini_model
+
+        # Map aspect ratio to suffix used in MODEL_CONFIG
+        # 16:9 -> landscape, 9:16 -> portrait, 1:1 -> square, etc.
+        ratio_suffix_map = {
+            "16:9": "landscape",
+            "9:16": "portrait",
+            "1:1": "square",
+            "4:3": "four-three",
+            "3:4": "three-four",
+            "1:4": "1-4",
+            "4:1": "4-1",
+            "1:8": "1-8",
+            "8:1": "8-1",
+        }
+        ratio_suffix = ratio_suffix_map.get(aspect_ratio, aspect_ratio.replace(":", "-"))
+
+        # Build internal model ID following MODEL_CONFIG naming convention
+        # e.g., "gemini-3.0-pro-image-landscape", "gemini-3.0-pro-image-landscape-2k"
+        internal_model_id = f"{model_prefix}-{ratio_suffix}"
+
+        # Add size suffix if specified and not 1K
+        upsample = None
+        if image_size and image_size != "1K":
+            if image_size not in GEMINI_IMAGE_SIZE_MAP:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": {
+                            "code": 400,
+                            "message": f"Invalid image size: {image_size}. Supported: {list(GEMINI_IMAGE_SIZE_MAP.keys())}"
+                        }
+                    }
+                )
+            upsample = GEMINI_IMAGE_SIZE_MAP[image_size]
+            if upsample:
+                internal_model_id = f"{internal_model_id}-{image_size.lower()}"
+
+        # Check if internal model actually exists in MODEL_CONFIG
+        # This catches cases where gemini_mapping declares support but MODEL_CONFIG doesn't have it
+        from ..services.generation_handler import MODEL_CONFIG
+        if internal_model_id not in MODEL_CONFIG:
+            # Find actually available ratios by checking which ones exist in MODEL_CONFIG
+            available_ratios = []
+            for ratio in model_config["supported_ratios"]:
+                test_ratio_suffix = ratio_suffix_map.get(ratio, ratio.replace(":", "-"))
+                test_model_id = f"{model_prefix}-{test_ratio_suffix}"
+                if test_model_id in MODEL_CONFIG:
+                    available_ratios.append(ratio)
+
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "code": 400,
+                        "message": f"Aspect ratio '{aspect_ratio}' is not supported by model '{gemini_model}'. "
+                                   f"Supported ratios: {available_ratios}"
+                    }
+                }
+            )
+
+        return internal_model_id, upsample
+
+    @staticmethod
+    def get_model_info(gemini_model: str) -> Optional[Dict[str, Any]]:
+        """Get model information for a Gemini model"""
+        if gemini_model in GEMINI_IMAGE_MODEL_MAP:
+            config = GEMINI_IMAGE_MODEL_MAP[gemini_model]
+            return {
+                "type": "image",
+                "model_name": config["model_name"],
+                "supported_ratios": config["supported_ratios"]
+            }
+        return None
+
+
+class GeminiResponseFormatter:
+    """Format GenerationHandler responses to Gemini API format"""
+
+    @staticmethod
+    def format_image_response(base64_data: str, mime_type: str = "image/png") -> Dict[str, Any]:
+        """
+        Format image generation response to Gemini API format (官方格式).
+
+        Returns:
+            Dict matching Gemini generateContent response format
+        """
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": base64_data
+                                }
+                            }
+                        ]
+                    },
+                    "finishReason": "STOP",
+                    "index": 0
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 0,
+                "candidatesTokenCount": 0,
+                "totalTokenCount": 0
+            }
+        }
+
+    @staticmethod
+    def format_video_operation(operation_name: str) -> Dict[str, Any]:
+        """
+        Format video generation operation response (官方格式).
+
+        Returns:
+            Dict matching Gemini long-running operation format
+        """
+        return {
+            "name": operation_name,
+            "done": False,
+            "metadata": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningMetadata",
+                "predictedOutputTokenCount": 0
+            }
+        }
+
+    @staticmethod
+    def format_video_result(operation_name: str, video_url: str) -> Dict[str, Any]:
+        """
+        Format completed video operation result (官方格式).
+
+        Returns:
+            Dict matching Gemini GenerateVideosResponse format
+        """
+        return {
+            "name": operation_name,
+            "done": True,
+            "response": {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateVideosResponse",
+                "generatedVideos": [
+                    {
+                        "video": {
+                            "uri": video_url,
+                            "mimeType": "video/mp4"
+                        }
+                    }
+                ]
+            }
+        }
+
+    @staticmethod
+    def format_operation_result(
+        operation_name: str,
+        done: bool,
+        result_urls: Optional[List[str]] = None,
+        error_message: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Format operation status response (官方格式).
+
+        Args:
+            operation_name: The operation identifier
+            done: Whether the operation is complete
+            result_urls: List of result URLs (for completed operations)
+            error_message: Error message (for failed operations)
+
+        Returns:
+            Dict matching Gemini operation format
+        """
+        response: Dict[str, Any] = {
+            "name": operation_name,
+            "done": done
+        }
+
+        if error_message:
+            response["error"] = {
+                "code": 500,
+                "message": error_message,
+                "status": "INTERNAL"
+            }
+        elif done and result_urls:
+            # 官方格式: GenerateVideosResponse
+            response["response"] = {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.GenerateVideosResponse",
+                "generatedVideos": [
+                    {
+                        "video": {
+                            "uri": url,
+                            "mimeType": "video/mp4"
+                        }
+                    } for url in result_urls
+                ]
+            }
+        else:
+            # Still processing (官方格式)
+            response["metadata"] = {
+                "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningMetadata",
+                "predictedOutputTokenCount": 0
+            }
+
+        return response
+
+    @staticmethod
+    def format_model_info(
+        model_name: str,
+        display_name: str,
+        description: str,
+        generation_methods: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Format model information for list/get model endpoints.
+
+        Returns:
+            Dict matching Gemini model info format
+        """
+        return {
+            "name": f"models/{model_name}",
+            "version": "1.0",
+            "displayName": display_name,
+            "description": description,
+            "inputTokenLimit": 8192,
+            "outputTokenLimit": 2048,
+            "supportedGenerationMethods": generation_methods
+        }
+
+    @staticmethod
+    def format_error_response(
+        message: str,
+        code: int = 400,
+        status: Optional[str] = None,
+        details: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Format error response in Gemini API format (官方格式).
+
+        Args:
+            message: Error message
+            code: HTTP status code
+            status: Error status (e.g., "INVALID_ARGUMENT", "PERMISSION_DENIED")
+            details: Optional list of error details
+
+        Returns:
+            Dict matching Gemini error response format
+        """
+        # 默认 status 映射
+        if status is None:
+            status_map = {
+                400: "INVALID_ARGUMENT",
+                401: "UNAUTHENTICATED",
+                403: "PERMISSION_DENIED",
+                404: "NOT_FOUND",
+                429: "RESOURCE_EXHAUSTED",
+                500: "INTERNAL",
+                503: "UNAVAILABLE"
+            }
+            status = status_map.get(code, "INTERNAL")
+
+        error_response: Dict[str, Any] = {
+            "error": {
+                "code": code,
+                "message": message,
+                "status": status
+            }
+        }
+
+        # 添加 details（如果有）
+        if details:
+            error_response["error"]["details"] = details
+
+        return error_response

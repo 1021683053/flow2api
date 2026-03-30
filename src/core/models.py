@@ -1,7 +1,7 @@
 """Data models for Flow2API"""
 
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List, Union, Any, Literal
+from typing import Optional, List, Union, Any, Dict, Literal
 from datetime import datetime
 
 
@@ -291,3 +291,63 @@ class ChatCompletionRequest(BaseModel):
     contents: Optional[List[Any]] = None  # Gemini native contents
 
     model_config = ConfigDict(extra="allow")  # Allow extra fields like extra_body passthrough
+
+
+# ========== Gemini API Compatible Models ==========
+
+class GeminiContentPart(BaseModel):
+    """Single part of content (text or inline data) for Gemini API"""
+
+    text: Optional[str] = None
+    inlineData: Optional[GeminiInlineData] = None
+
+
+class GeminiGenerationConfig(BaseModel):
+    """Generation configuration for Gemini image generation"""
+
+    aspectRatio: Optional[str] = "16:9"
+    imageSize: Optional[str] = None  # "1K", "2K", "4K"
+
+
+class GeminiGenerateContentResponse(BaseModel):
+    """Gemini generateContent response"""
+
+    candidates: List[Dict[str, Any]]
+    usageMetadata: Optional[Dict[str, Any]] = None
+
+
+class GeminiPredictInstance(BaseModel):
+    """Single prediction instance for Gemini video generation"""
+
+    prompt: str
+    aspectRatio: Optional[str] = "16:9"
+    resolution: Optional[str] = "720p"  # "720p", "1080p", "4k"
+
+
+class GeminiPredictLongRunningRequest(BaseModel):
+    """Gemini predictLongRunning request body"""
+
+    instances: List[GeminiPredictInstance]
+    parameters: Optional[Dict[str, Any]] = None
+
+
+class GeminiOperationResponse(BaseModel):
+    """Gemini long-running operation response"""
+
+    name: str
+    done: bool = False
+    response: Optional[Dict[str, Any]] = None
+    error: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class GeminiModelInfo(BaseModel):
+    """Gemini model information"""
+
+    name: str
+    version: str
+    displayName: str
+    description: str
+    inputTokenLimit: int
+    outputTokenLimit: int
+    supportedGenerationMethods: List[str]

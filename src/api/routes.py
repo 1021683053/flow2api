@@ -682,7 +682,6 @@ async def list_model_aliases(api_key: str = Depends(verify_api_key_flexible)):
     return {"object": "list", "data": alias_models}
 
 
-@router.get("/v1beta/models")
 @router.get("/models")
 async def list_gemini_models(api_key: str = Depends(verify_api_key_flexible)):
     """List available models using Gemini-compatible response shape."""
@@ -695,7 +694,6 @@ async def list_gemini_models(api_key: str = Depends(verify_api_key_flexible)):
     }
 
 
-@router.get("/v1beta/models/{model}")
 @router.get("/models/{model}")
 async def get_gemini_model(model: str, api_key: str = Depends(verify_api_key_flexible)):
     """Return a single model using Gemini-compatible response shape."""
@@ -747,7 +745,6 @@ async def create_chat_completion(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@router.post("/v1beta/models/{model}:generateContent")
 @router.post("/models/{model}:generateContent")
 async def generate_content(
     model: str,
@@ -786,7 +783,6 @@ async def generate_content(
         )
 
 
-@router.post("/v1beta/models/{model}:streamGenerateContent")
 @router.post("/models/{model}:streamGenerateContent")
 async def stream_generate_content(
     model: str,

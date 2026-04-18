@@ -41,6 +41,61 @@ def set_generation_handler(handler: GenerationHandler):
     generation_handler = handler
 
 
+def _ensure_generation_handler() -> GenerationHandler:
+    if generation_handler is None:
+        raise HTTPException(
+            status_code=503,
+            detail=response_formatter.format_error_response("Generation handler not initialized", 503)
+        )
+    return generation_handler
+
+
+class _GeminiRiskAcceptingFlowClientProxy:
+    """仅供 v1beta 路由使用：参考图上传时忽略 project_id，接受 legacy fallback 风险。"""
+
+    def __init__(self, base_flow_client):
+        self._base_flow_client = base_flow_client
+
+    def __getattr__(self, name: str):
+        return getattr(self._base_flow_client, name)
+
+    async def upload_image(
+        self,
+        at: str,
+        image_bytes: bytes,
+        aspect_ratio: str = "IMAGE_ASPECT_RATIO_LANDSCAPE",
+        project_id: Optional[str] = None
+    ) -> str:
+        return await self._base_flow_client.upload_image(
+            at=at,
+            image_bytes=image_bytes,
+            aspect_ratio=aspect_ratio,
+            project_id=None,
+        )
+
+
+def _get_request_generation_handler(reference_images: Optional[List[bytes]]) -> GenerationHandler:
+    base_handler = _ensure_generation_handler()
+    if not reference_images:
+        return base_handler
+
+    debug_logger.log_warning(
+        "[Gemini] v1beta 检测到参考图输入，启用兼容上传适配："
+        "上传时忽略 project_id，允许 legacy fallback，存在素材归属到错误项目的风险。"
+    )
+
+    compat_flow_client = _GeminiRiskAcceptingFlowClientProxy(base_handler.flow_client)
+    proxy_manager = getattr(base_handler.file_cache, "proxy_manager", None) if getattr(base_handler, "file_cache", None) else None
+    return GenerationHandler(
+        flow_client=compat_flow_client,
+        token_manager=base_handler.token_manager,
+        load_balancer=base_handler.load_balancer,
+        db=base_handler.db,
+        concurrency_manager=base_handler.concurrency_manager,
+        proxy_manager=proxy_manager,
+    )
+
+
 # ========== Pydantic Models ==========
 
 class GeminiContentPart(BaseModel):
@@ -355,10 +410,12 @@ async def gemini_generate_content(
             f"prompt={prompt[:50]}..., aspect_ratio={aspect_ratio}, size={image_size}"
         )
 
+        request_handler = _get_request_generation_handler(images)
+
         # Call generation handler with stream=True to get actual generation result
         # Then collect all chunks and extract the final result
         result_chunks = []
-        async for chunk in generation_handler.handle_generation(
+        async for chunk in request_handler.handle_generation(
             model=internal_model_id,
             prompt=prompt,
             images=images,
@@ -544,6 +601,7 @@ async def gemini_predict_long_running(
 
         # Extract image input from inlineData (optional)
         images = extract_reference_images_from_contents(request.contents)
+        request_handler = _get_request_generation_handler(images)
 
         # Parse generationConfig.videoConfig (optional, validated but not mapped)
         aspect_ratio = None
@@ -613,7 +671,7 @@ async def gemini_predict_long_running(
         error_messages = []
         all_chunks = []
 
-        async for chunk in generation_handler.handle_generation(
+        async for chunk in request_handler.handle_generation(
             model=model,
             prompt=prompt,
             images=images,

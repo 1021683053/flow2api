@@ -138,6 +138,7 @@ class GenerationConfig(BaseModel):
     id: int = 1
     image_timeout: int = 300  # seconds
     video_timeout: int = 1500  # seconds
+    max_retries: int = 3  # 请求最大重试次数
 
 
 class CallLogicConfig(BaseModel):
@@ -223,6 +224,9 @@ class ImageConfig(BaseModel):
 
     aspectRatio: Optional[str] = None  # "16:9", "9:16", "1:1", "4:3", "3:4"
     imageSize: Optional[str] = None  # "2k", "4k"
+
+    # 兼容 OpenAI/NewAPI 等上游可能透传的 size/quality 或 snake_case 字段
+    model_config = ConfigDict(extra="allow")
 
 
 class GenerationConfigParam(BaseModel):
